@@ -21,7 +21,6 @@ class GitHubSearchTool:
             self.headers["Authorization"] = f"token {self.api_key}"
 
     def is_available(self) -> bool:
-        # We assume availability if we can hit the API
         try:
             resp = requests.get(f"{self.base_url}/repos/{self.repo_name}", headers=self.headers)
             if resp.status_code == 200:
@@ -40,11 +39,7 @@ class GitHubSearchTool:
         - Exact match might not be perfect.
         - Requires constructing a specific query string.
         """
-        # Construct GitHub search query: "query repo:owner/name"
-        # We strip characters not supported well by simple API search or rely on exact text if possible
-        # GitHub API is not fully regex capable like ripgrep, so we do best-effort keyword search
-        
-        # Clean query for GitHub (simple split if it looks like regex, or pass through)
+
         search_query = f"{query} repo:{self.repo_name}"
         
         url = f"{self.base_url}/search/code"
@@ -52,7 +47,6 @@ class GitHubSearchTool:
         
         print(f"  [GitHub API] Searching for: '{query}'...")
         
-        # Rate limit handling
         import time
         time.sleep(2)
 
@@ -75,15 +69,8 @@ class GitHubSearchTool:
             parsed_results = []
             for item in items:
                 file_path = item["path"]
-                # Use the API URL to get content reliably (handles private repos better)
-                # item["url"] is like https://api.github.com/repositories/XXX/contents/YYY?ref=...
-                # Note: Search API returns 'url' pointing to the blob/content endpoint usually.
-                # Let's verify and use it.
                 
                 try:
-                    # The search item 'url' points to the blob data, but we might want the 'git_url' or similar.
-                    # Actually, for the Code Search API, item['url'] is the blob API.
-                    # Let's request it.
                     content_url = item["url"]
                     content_resp = requests.get(content_url, headers=self.headers)
                     
@@ -91,7 +78,6 @@ class GitHubSearchTool:
                         content_json = content_resp.json()
                         import base64
                         
-                        # GitHub API returns content in base64
                         if "content" in content_json and content_json["encoding"] == "base64":
                             file_content = base64.b64decode(content_json["content"]).decode('utf-8', errors='replace')
                             lines = file_content.splitlines()
@@ -131,8 +117,6 @@ class GitHubSearchTool:
         Useful for repos not yet indexed by GitHub Code Search.
         """
         try:
-            # 1. Get the tree
-            # Get default branch first (optimization: allow user to specify? assume main/master for now)
             repo_info = requests.get(f"{self.base_url}/repos/{self.repo_name}", headers=self.headers).json()
             branch = repo_info.get("default_branch", "main")
             
@@ -144,9 +128,6 @@ class GitHubSearchTool:
                 return []
             
             tree = resp.json().get("tree", [])
-            # Filter for text-like files (blobs) and avoid huge files or images
-            # Simple heuristic: extension whitelist or skip known binaries
-            # For this context, let's look at all blobs but skip common binary exts
             skip_exts = {'.png', '.jpg', '.jpeg', '.gif', '.ico', '.pdf', '.zip', '.exe', '.pyc'}
             blobs = [x for x in tree if x["type"] == "blob" and os.path.splitext(x["path"])[1].lower() not in skip_exts]
             
@@ -162,8 +143,6 @@ class GitHubSearchTool:
 
             def fetch_and_search(blob):
                 try:
-                    # Fetch blob content
-                    # We can use the 'url' from the tree item which is the blob API
                     b_resp = requests.get(blob["url"], headers=self.headers)
                     if b_resp.status_code == 200:
                         data = b_resp.json()

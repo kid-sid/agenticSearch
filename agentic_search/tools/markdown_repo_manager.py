@@ -21,14 +21,12 @@ class MarkdownRepoManager:
         Fetches repo content via API and saves as a SINGLE Markdown file in cache.
         Returns the path to the cached directory.
         """
-        # Sanitization
         if "/tree/" in repo_name:
             repo_name = repo_name.split("/tree/")[0]
             
         safe_name = repo_name.replace("/", "_").replace("\\", "_") + "_md"
         repo_dir = os.path.join(self.cache_dir, safe_name)
         
-        # Clean up existing cache to ensure single-file state
         if os.path.exists(repo_dir):
             print(f"[MD Manager] Clearing existing cache for {repo_name}...")
             shutil.rmtree(repo_dir)
@@ -36,12 +34,8 @@ class MarkdownRepoManager:
         os.makedirs(repo_dir)
         print(f"[MD Manager] initializing cache for {repo_name}...")
             
-        # Get tree
         try:
-            # FORCE 'main' branch as per user request
             branch = "main"
-            
-            # recursive tree
             tree_url = f"https://api.github.com/repos/{repo_name}/git/trees/{branch}?recursive=1"
             print(f"[MD Manager] Fetching file tree...")
             resp = requests.get(tree_url, headers=self.headers)
@@ -58,7 +52,6 @@ class MarkdownRepoManager:
             tree = resp.json().get("tree", [])
             blobs = [x for x in tree if x["type"] == "blob"]
             
-            # Filter binaries/irrelevant
             skip_exts = {'.png', '.jpg', '.jpeg', '.gif', '.ico', '.pdf', '.zip', '.exe', '.pyc', '.svg'}
             target_blobs = [b for b in blobs if os.path.splitext(b["path"])[1].lower() not in skip_exts]
             
@@ -84,7 +77,6 @@ class MarkdownRepoManager:
                     except Exception as e:
                         print(f"Failed to fetch {path}: {e}")
 
-            # Sort by path for consistency
             all_content.sort()
             
             full_md_path = os.path.join(repo_dir, "full_codebase.md")
@@ -110,10 +102,8 @@ class MarkdownRepoManager:
                 content = ""
                 if "content" in data and data["encoding"] == "base64":
                     content = base64.b64decode(data["content"]).decode('utf-8', errors='replace')
-                    # Strip null bytes (simple fix for UTF-16 confusion)
                     content = content.replace('\x00', '')
                 
-                # Wrap in markdown code block
                 ext = os.path.splitext(rel_path)[1].lstrip(".")
                 if not ext: ext = "text"
                 
@@ -148,19 +138,14 @@ class MarkdownRepoManager:
             with open(full_md_path, "r", encoding="utf-8") as f:
                 content = f.read()
                 
-            # Naive parsing for README
-            # Matches "# File: README.md" or similar
             if "# File: README" in content:
                 parts = content.split("# File: README")
                 if len(parts) > 1:
-                    # Take the immediate next part, probably the README body
-                    # It might end at the next "# File: "
                     readme_part = parts[1]
                     if "# File: " in readme_part:
                         readme_part = readme_part.split("# File: ")[0]
-                    return readme_part[:10000] # Limit size
+                    return readme_part[:10000]
             
-            # Fallback: Return first 2000 chars of file
             return content[:2000]
             
         except Exception as e:
@@ -176,7 +161,6 @@ class MarkdownRepoManager:
             
         print(f"[MD Manager] Fetching README for {repo_name}...")
         try:
-            # Try common README names
             for name in ["README.md", "README", "readme.md", "README.txt"]:
                 url = f"https://api.github.com/repos/{repo_name}/contents/{name}"
                 resp = requests.get(url, headers=self.headers)

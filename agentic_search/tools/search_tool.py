@@ -11,15 +11,12 @@ class SearchTool:
     def __init__(self, executable_path: str = "rg"):
         self.executable_path = executable_path
         
-        # Check standard PATH
         if not self.is_available():
-            # Check known fallback locations
             user_profile = os.environ.get("USERPROFILE", "")
             fallback_path = os.path.join(user_profile, r"AppData\Local\Microsoft\WinGet\Packages\BurntSushi.ripgrep.MSVC_Microsoft.Winget.Source_8wekyb3d8bbwe\ripgrep-15.1.0-x86_64-pc-windows-msvc\rg.exe")
             
             if os.path.exists(fallback_path):
                 self.executable_path = fallback_path
-                # Silent adoption of fallback
             else:
                 print(f"Warning: '{self.executable_path}' not found in PATH.")
 
@@ -31,7 +28,6 @@ class SearchTool:
         if not self.is_available():
             raise FileNotFoundError(f"ripgrep executable '{self.executable_path}' not found.")
 
-        # Construct command: rg --json <query> <path>
         cmd = [self.executable_path, "--json", "-i", query, search_path]
         if extra_args:
             cmd.extend(extra_args)
@@ -46,7 +42,6 @@ class SearchTool:
             try:
                 data = json.loads(line)
                 if data["type"] == "match":
-                    # Extract relevant info
                     match_data = data["data"]
                     parsed_results.append({
                         "file": match_data["path"]["text"],
