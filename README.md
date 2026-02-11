@@ -47,11 +47,20 @@ Run the tool against your local files. It will try to read a local `README.md` f
 python main.py "Where is the main entry point?" --path . --provider openai
 ```
 
-### 3. Legacy Full Clone
+### 3. Smart Suggestions
+Generate relevant technical questions from the codebase.
+```bash
+python main.py --github-repo owner/repo --suggest
+```
+
+### 4. Legacy Full Clone
 If you need the actual raw code files (e.g. for execution), use `--clone`.
 ```bash
-python main.py "query" --github-repo owner/repo --clone
+python main.py "query" --github-repo owner/large-repo --clone
 ```
+
+## GraphQL Optimization
+The tool now uses GitHub's GraphQL API to fetch file contents in batches (50 files/request). This significantly reduces HTTP overhead and rate limit usage compared to standard REST API calls.
 
 ## Structure
 - `main.py`: CLI entry point. Orchestrates the flow: **Context -> Cache -> Search -> Answer**.

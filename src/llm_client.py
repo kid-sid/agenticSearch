@@ -122,3 +122,40 @@ README Content:
             return response.choices[0].message.content
 
         return ""
+
+    def generate_questions(self, context: str, num: int = 5) -> str:
+        """
+        Generates sample questions and answers based on the project context.
+        """
+        if self.provider == "mock":
+            return "1. **Question**: What is this? \n   - **Answer**: A mock project."
+
+        # Truncate context to safe limit (approx 15k tokens) to avoid errors
+        # GPT-4o has 128k context, but we want to be cost-effective and safe.
+        safe_context = context[:50000] 
+
+        prompt = f"""
+You are an expert developer assistant. 
+Based on the following project codebase dump, generate {num} insightful technical questions that a new developer might ask to understand the architecture, key features, or usage of this system.
+For each question, provide a brief, accurate answer derived ONLY from the provided context.
+
+Format:
+1. **Question**: [Question text]
+   - **Answer**: [Brief answer]
+
+Context (Truncated):
+{safe_context}
+        """
+
+        if self.provider == "openai" and self.client:
+            try:
+                response = self.client.chat.completions.create(
+                    model="gpt-4o",
+                    messages=[{"role": "system", "content": "You are a helpful assistant."},
+                              {"role": "user", "content": prompt}]
+                )
+                return response.choices[0].message.content
+            except Exception as e:
+                return f"Error generating questions: {e}"
+
+        return "LLM Provider not configured."

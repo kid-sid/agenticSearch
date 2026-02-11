@@ -35,7 +35,15 @@ class MarkdownRepoManager:
         print(f"[MD Manager] initializing cache for {repo_name}...")
             
         try:
+            # 1. Get default branch
+            repo_info_url = f"https://api.github.com/repos/{repo_name}"
+            print(f"[MD Manager] Resolving default branch...")
+            info_resp = requests.get(repo_info_url, headers=self.headers)
             branch = "main"
+            if info_resp.status_code == 200:
+                branch = info_resp.json().get("default_branch", "main")
+            print(f"[MD Manager] Default branch is '{branch}'")
+
             tree_url = f"https://api.github.com/repos/{repo_name}/git/trees/{branch}?recursive=1"
             print(f"[MD Manager] Fetching file tree...")
             resp = requests.get(tree_url, headers=self.headers)
@@ -57,25 +65,28 @@ class MarkdownRepoManager:
             
             print(f"[MD Manager] Syncing {len(target_blobs)} files...")
             
-            all_content = []
-            completed = 0
-            total = len(target_blobs)
+            if len(target_blobs) > 1000:
+                print(f"[MD Manager] WARNING: Large repository detected ({len(target_blobs)} files).")
+                print(f"  - This may take a long time and hit API rate limits.")
+                print(f"  - Consider using '--clone' which is faster for large repos.")
             
-            with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
-                futures = {executor.submit(self._fetch_content, b): b["path"] for b in target_blobs}
+            all_content = []
+            
+            # Batching logic
+            batch_size = 50 # Conservative batch size for GraphQL complexity
+            batches = [target_blobs[i:i + batch_size] for i in range(0, len(target_blobs), batch_size)]
+            
+            total_batches = len(batches)
+            print(f"[MD Manager] processing {total_batches} batches (GraphQL)...")
+            
+            for i, batch in enumerate(batches):
+                print(f"[MD Manager] Fetching batch {i+1}/{total_batches}...")
+                batch_content = self._fetch_batch_graphql(repo_name, batch)
+                all_content.extend(batch_content)
                 
-                for future in concurrent.futures.as_completed(futures):
-                    path = futures[future]
-                    completed += 1
-                    if completed % 100 == 0:
-                        print(f"[MD Manager] Fetched {completed}/{total} files...")
-                        
-                    try:
-                        content = future.result()
-                        if content:
-                            all_content.append(content)
-                    except Exception as e:
-                        print(f"Failed to fetch {path}: {e}")
+                # Small delay to be nice to API
+                import time
+                time.sleep(0.5)
 
             all_content.sort()
             
@@ -114,14 +125,85 @@ class MarkdownRepoManager:
             
         return ""
 
+    def _fetch_batch_graphql(self, repo_name: str, blobs: List[Dict]) -> List[str]:
+        """
+        Fetches a batch of blobs using a single GraphQL query.
+        """
+        owner, name = repo_name.split("/")
+        
+        # Build Query
+        query_parts = []
+        path_map = {}
+        
+        for idx, blob in enumerate(blobs):
+            path = blob["path"]
+            alias = f"f{idx}"
+            path_map[alias] = path
+            # Escape quotes in path just in case
+            safe_path = path.replace('"', '\\"')
+            query_parts.append(f'{alias}: object(expression: "HEAD:{safe_path}") {{ ... on Blob {{ isBinary text }} }}')
+            
+        inner_query = "\n".join(query_parts)
+        query = f"""
+        query {{
+            repository(owner: "{owner}", name: "{name}") {{
+                {inner_query}
+            }}
+        }}
+        """
+        
+        url = "https://api.github.com/graphql"
+        results = []
+        
+        try:
+            resp = requests.post(url, json={"query": query}, headers=self.headers)
+            if resp.status_code != 200:
+                print(f"GraphQL Error {resp.status_code}: {resp.text}")
+                return []
+                
+            data = resp.json()
+            if "errors" in data:
+                # Log first error but try to process partial data
+                print(f"GraphQL Errors (Sample): {data['errors'][0].get('message')}")
+            
+            repo_data = data.get("data", {}).get("repository", {})
+            if not repo_data:
+                return []
+                
+            for alias, file_data in repo_data.items():
+                if not file_data: continue
+                
+                if file_data.get("isBinary"):
+                    continue
+                    
+                text = file_data.get("text", "")
+                if not text: continue
+                
+                path = path_map.get(alias, "unknown")
+                ext = os.path.splitext(path)[1].lstrip(".")
+                if not ext: ext = "text"
+                
+                # Check for empty content
+                if not text.strip(): continue
+
+                md_block = f"# File: {path}\n\n```{ext}\n{text}\n```\n\n"
+                results.append(md_block)
+                
+        except Exception as e:
+            print(f"Batch fetch error: {e}")
+            
+        return results
+
     def get_cache_path(self, repo_name: str) -> str:
         """Returns the path to the cached repo if it exists, else None."""
         if "/tree/" in repo_name:
             repo_name = repo_name.split("/tree/")[0]
         safe_name = repo_name.replace("/", "_").replace("\\", "_") + "_md"
         repo_dir = os.path.join(self.cache_dir, safe_name)
-        if os.path.exists(repo_dir) and os.path.exists(os.path.join(repo_dir, "full_codebase.md")):
-            return repo_dir
+        full_md = os.path.join(repo_dir, "full_codebase.md")
+        if os.path.exists(repo_dir) and os.path.exists(full_md):
+            if os.path.getsize(full_md) > 0:
+                return repo_dir
         return None
 
     def get_local_context(self, repo_name: str) -> str:

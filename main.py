@@ -12,6 +12,11 @@ from agentic_search.tools.markdown_repo_manager import MarkdownRepoManager
 from agentic_search.llm_client import LLMClient
 from agentic_search.history_manager import HistoryManager
 
+# Force UTF-8 for stdout/stderr (fixes Windows console encoding issues)
+if sys.platform == "win32":
+    sys.stdout.reconfigure(encoding='utf-8')
+    sys.stderr.reconfigure(encoding='utf-8')
+
 def main():
     parser = argparse.ArgumentParser(description="Agentic Search Tool")
     parser.add_argument("question", nargs="?", help="The question you want to ask about the codebase.")
@@ -20,6 +25,7 @@ def main():
     parser.add_argument("--provider", default="mock", help="LLM Provider to use (default: mock).")
     parser.add_argument("--reset", action="store_true", help="Reset conversation history.")
     parser.add_argument("--clone", action="store_true", help="Use full git clone (legacy behavior). Default is markdown cache.")
+    parser.add_argument("--suggest", action="store_true", help="Generate sample questions based on the codebase context.")
     
     args = parser.parse_args()
 
@@ -63,6 +69,33 @@ def main():
             print(f"Debug: Using GITHUB_TOKEN starting with {token[:4]}...")
                 
             repo_mgr = MarkdownRepoManager(token=token, cache_dir=".cache")
+
+            if args.suggest:
+                print(f"Generating suggested questions for {args.github_repo}...")
+                cached_path = repo_mgr.get_cache_path(args.github_repo)
+                context = ""
+                
+                if cached_path:
+                    try:
+                        print(f"Reading local cache: {cached_path}...")
+                        with open(os.path.join(cached_path, "full_codebase.md"), "r", encoding="utf-8") as f:
+                            context = f.read()
+                    except Exception as e:
+                        print(f"Error reading cache: {e}")
+                else:
+                    print("Repo not cached. Fetching README for context...")
+                    context = repo_mgr.fetch_readme(args.github_repo)
+                
+                if context:
+                    print("Asking LLM to generate questions...")
+                    questions = llm.generate_questions(context)
+                    print("\n=== Suggested Questions & Answers ===\n")
+                    print(questions)
+                    print("\n=====================================\n")
+                else:
+                    print("Error: Could not retrieve any context (Cache or README) to generate questions.")
+                
+                return # Exit after suggestions
             
             # Check if already cached
             cached_path = repo_mgr.get_cache_path(args.github_repo)
