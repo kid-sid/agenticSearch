@@ -12,13 +12,7 @@ class SearchTool:
         self.executable_path = executable_path
         
         if not self.is_available():
-            user_profile = os.environ.get("USERPROFILE", "")
-            fallback_path = os.path.join(user_profile, r"AppData\Local\Microsoft\WinGet\Packages\BurntSushi.ripgrep.MSVC_Microsoft.Winget.Source_8wekyb3d8bbwe\ripgrep-15.1.0-x86_64-pc-windows-msvc\rg.exe")
-            
-            if os.path.exists(fallback_path):
-                self.executable_path = fallback_path
-            else:
-                print(f"Warning: '{self.executable_path}' not found in PATH.")
+            print(f"Warning: '{self.executable_path}' not found in PATH.")
 
     def search(self, query: str, search_path: str = ".", extra_args: Optional[List[str]] = None) -> List[Dict]:
         """
@@ -52,3 +46,44 @@ class SearchTool:
                 continue
         
         return parsed_results
+
+    def search_and_chunk(self, query: str, search_path: str = ".", context_lines: int = 10) -> List[Dict]:
+        """
+        Search using ripgrep and return results with context lines, as cohesive chunks.
+        """
+        matches = self.search(query, search_path)
+        chunks = []
+        seen_chunks = set() # (file, start_line, end_line)
+
+        for match in matches:
+            file_path = match["file"]
+            line_num = match["line_number"]
+            
+            start_line = max(1, line_num - context_lines)
+            end_line = line_num + context_lines 
+            
+            chunk_id = (file_path, start_line, end_line)
+            if chunk_id in seen_chunks:
+                continue
+            
+            seen_chunks.add(chunk_id)
+            
+            try:
+                abs_path = os.path.join(search_path, file_path)
+                with open(abs_path, "r", encoding="utf-8", errors="replace") as f:
+                    lines = f.readlines()
+                    actual_end = min(len(lines), end_line)
+                    chunk_lines = lines[start_line-1:actual_end]
+                    content = "".join(chunk_lines).strip()
+                    
+                    chunks.append({
+                        "file": file_path,
+                        "start_line": start_line,
+                        "end_line": actual_end,
+                        "content": f"File: {file_path} (lines {start_line}-{actual_end})\n\n{content}",
+                        "source": "keyword"
+                    })
+            except Exception:
+                continue
+                
+        return chunks

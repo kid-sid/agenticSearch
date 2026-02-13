@@ -28,9 +28,9 @@ class HistoryManager:
     def add_interaction(self, question: str, answer: str):
         self.history.append({"role": "user", "content": question})
         self.history.append({"role": "assistant", "content": answer})
-        # Keep last 10 interactions to avoid infinite growth
-        if len(self.history) > 5:
-            self.history = self.history[-5:]
+        # Keep last 10 messages (5 interactions) to avoid infinite growth
+        if len(self.history) > 10:
+            self.history = self.history[-10:]
         self._save()
 
     def get_recent_context(self, limit: int = 5) -> List[Dict[str, str]]:

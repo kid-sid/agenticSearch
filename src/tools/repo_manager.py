@@ -8,13 +8,40 @@ class RepoManager:
         if not os.path.exists(self.cache_dir):
             os.makedirs(self.cache_dir)
 
+    def _generate_local_tree(self, root_path: str) -> str:
+        """Generates an ASCII tree for the local repository."""
+        skip_dirs = {
+            'node_modules', '.git', '.cache', '__pycache__', 'venv', '.venv',
+            'dist', 'build', 'target', 'bin', 'obj', 'vendor', '.idea', '.vscode'
+        }
+        
+        lines = []
+        def walk(path, prefix=""):
+            try:
+                items = sorted(os.listdir(path))
+            except PermissionError:
+                return
+                
+            filtered_items = [i for i in items if i not in skip_dirs]
+            
+            for i, name in enumerate(filtered_items):
+                full_path = os.path.join(path, name)
+                is_last = (i == len(filtered_items) - 1)
+                connector = "└── " if is_last else "├── "
+                lines.append(f"{prefix}{connector}{name}")
+                
+                if os.path.isdir(full_path):
+                    new_prefix = prefix + ("    " if is_last else "│   ")
+                    walk(full_path, new_prefix)
+
+        walk(root_path)
+        return "\n".join(lines)
+
     def sync_repo(self, repo_name: str) -> str:
         """
         Clones or updates the given repo (e.g., "owner/repo") in the cache directory.
         Returns the absolute path to the local copy.
         """
-        # Sanitization: owner/repo -> owner_repo
-        # Also strip /tree/main if present
         if "/tree/" in repo_name:
             repo_name = repo_name.split("/tree/")[0]
         
@@ -24,21 +51,24 @@ class RepoManager:
         repo_url = f"https://github.com/{repo_name}.git"
 
         if os.path.exists(repo_path):
-            # Check if it's a git repo
             if os.path.exists(os.path.join(repo_path, ".git")):
                 print(f"[RepoManager] Updating existing repo: {repo_name}...")
                 try:
                     subprocess.run(["git", "pull"], cwd=repo_path, check=True, capture_output=True)
-                    print(f"[RepoManager] Updated {repo_name}.")
                 except subprocess.CalledProcessError as e:
-                    print(f"[RepoManager] Warning: Failed to pull '{repo_name}'. Using existing state. Error: {e}")
+                    print(f"[RepoManager] Warning: Failed to pull '{repo_name}'. Error: {e}")
             else:
-                print(f"[RepoManager] Directory exists but not a git repo. Re-cloning...")
                 shutil.rmtree(repo_path)
                 self._clone(repo_url, repo_path)
         else:
-            print(f"[RepoManager] Cloning new repo: {repo_name}...")
             self._clone(repo_url, repo_path)
+            
+        # Generate and save project structure
+        tree_str = self._generate_local_tree(repo_path)
+        structure_path = os.path.join(repo_path, "project_structure.txt")
+        with open(structure_path, "w", encoding='utf-8') as f:
+            f.write(tree_str)
+        print(f"[RepoManager] Generated project structure at: {structure_path}")
             
         return repo_path
 

@@ -16,6 +16,34 @@ class MarkdownRepoManager:
         if not os.path.exists(self.cache_dir):
             os.makedirs(self.cache_dir)
 
+    def _generate_tree_structure(self, tree: List[Dict]) -> str:
+        """Converts GitHub tree data into an ASCII tree string."""
+        paths = sorted([x["path"] for x in tree])
+        
+        # Build nested dict structure
+        root = {}
+        for path in paths:
+            parts = path.split('/')
+            curr = root
+            for part in parts:
+                if part not in curr:
+                    curr[part] = {}
+                curr = curr[part]
+
+        lines = []
+        def walk(node, prefix=""):
+            items = sorted(node.keys())
+            for i, name in enumerate(items):
+                is_last = (i == len(items) - 1)
+                connector = "└── " if is_last else "├── "
+                lines.append(f"{prefix}{connector}{name}")
+                
+                new_prefix = prefix + ("    " if is_last else "│   ")
+                walk(node[name], new_prefix)
+
+        walk(root)
+        return "\n".join(lines)
+
     def sync_repo(self, repo_name: str) -> str:
         """
         Fetches repo content via API and saves as a SINGLE Markdown file in cache.
@@ -50,41 +78,36 @@ class MarkdownRepoManager:
             
             if resp.status_code == 403:
                 print(f"[MD Manager] Error 403: Rate limit exceeded or invalid token.")
-                print(f"  - Check your GITHUB_TOKEN.")
-                print(f"  - Large repos may hit API limits. Try using '--clone' instead.")
                 raise Exception("GitHub API Rate Limit / Auth Error")
                 
             if resp.status_code != 200:
                  raise Exception(f"Tree fetch failed: {resp.status_code}")
                  
-            tree = resp.json().get("tree", [])
-            blobs = [x for x in tree if x["type"] == "blob"]
+            tree_data = resp.json().get("tree", [])
+            
+            # Generate and save project structure
+            tree_str = self._generate_tree_structure(tree_data)
+            structure_path = os.path.join(repo_dir, "project_structure.txt")
+            with open(structure_path, "w", encoding='utf-8') as f:
+                f.write(tree_str)
+            print(f"[MD Manager] Generated project structure at: {structure_path}")
+
+            blobs = [x for x in tree_data if x["type"] == "blob"]
             
             skip_exts = {'.png', '.jpg', '.jpeg', '.gif', '.ico', '.pdf', '.zip', '.exe', '.pyc', '.svg'}
             target_blobs = [b for b in blobs if os.path.splitext(b["path"])[1].lower() not in skip_exts]
             
             print(f"[MD Manager] Syncing {len(target_blobs)} files...")
             
-            if len(target_blobs) > 1000:
-                print(f"[MD Manager] WARNING: Large repository detected ({len(target_blobs)} files).")
-                print(f"  - This may take a long time and hit API rate limits.")
-                print(f"  - Consider using '--clone' which is faster for large repos.")
-            
             all_content = []
-            
-            # Batching logic
-            batch_size = 50 # Conservative batch size for GraphQL complexity
+            batch_size = 50
             batches = [target_blobs[i:i + batch_size] for i in range(0, len(target_blobs), batch_size)]
             
             total_batches = len(batches)
-            print(f"[MD Manager] processing {total_batches} batches (GraphQL)...")
-            
             for i, batch in enumerate(batches):
                 print(f"[MD Manager] Fetching batch {i+1}/{total_batches}...")
                 batch_content = self._fetch_batch_graphql(repo_name, batch)
                 all_content.extend(batch_content)
-                
-                # Small delay to be nice to API
                 import time
                 time.sleep(0.5)
 
@@ -93,6 +116,11 @@ class MarkdownRepoManager:
             full_md_path = os.path.join(repo_dir, "full_codebase.md")
             with open(full_md_path, "w", encoding='utf-8') as f:
                 f.write(f"# Codebase Dump for {repo_name}\n\n")
+                f.write("## Project Structure\n")
+                f.write("```text\n")
+                f.write(tree_str)
+                f.write("\n```\n\n")
+                f.write("## File Contents\n\n")
                 f.write("\n".join(all_content))
                 
             print(f"[MD Manager] Saved single markdown file at: {full_md_path}")
