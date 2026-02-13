@@ -36,19 +36,26 @@ graph TD
 ## Core Components
 
 ### 1. The Orchestrator (`main.py`)
-The primary entry point that manages the lifecycle of a search request. It executes a **7-Step Pipeline**:
-1. **Load Skeleton**: Retrieves the project file tree.
-2. **Skeleton Analysis**: Identifies critical files before searching.
-3. **Targeted Retrieval**: Injects full content of critical files to prevent truncation.
-4. **Code Analysis**: Builds a symbol index and call graph.
-5. **Hybrid Search**: Executes Vector, BM25, and Regex searches in parallel.
-6. **RRF & Reranking**: Merges results and uses a Cross-Encoder to select the top context.
-7. **Synthesis**: Generates the final grounded answer.
+The primary entry point that manages the lifecycle of a search request.
+### 3. Search Workflow (8-Step Pipeline)
 
-### 2. The Intelligence Layer (`src/llm_client.py`)
-The "brain" of the application. It interacts with OpenAI models to:
-- **Nominate Files**: Uses `gpt-4o-mini` to guess which files contain the answer based only on the file names.
-- **Generate Queries**: Translates natural language into technical search terms and regex patterns.
+1.  **Project Skeleton & MiniMap Loading**: Load file tree + `symbol_minimap.json` (signatures, docstrings, keywords).
+2.  **Query Expansion**: LLM refines user question into "Technical Intent" + keywords (e.g. "auth" -> "JWT validation").
+3.  **Skeleton Analysis**: LLM identifies 3-8 key files using the MiniMap and file tree.
+4.  **Targeted Retrieval**: Full content of identified files is read immediately.
+5.  **Symbol & Call Graph Analysis**: Extract symbols and relationships from targeted files.
+6.  **Triple-Hybrid Search**: Parallel Vector + BM25 + Ripgrep (regex) search for broader context.
+7.  **Merge & Rerank**: Combine targeted files + search results, rerank using Cross-Encoder.
+8.  **Answer Synthesis**: LLM generates answer using the curated context.
+
+### 4. Key Components
+
+-   **`LLMClient`**: Handles all LLM interactions (now using `src/prompts.py`).
+-   **`MarkdownRepoManager`**: Syncs GitHub repos to `.cache`, builds `symbol_minimap.json`.
+-   **`TargetedRetriever`**: surgically reads files identified by Skeleton Analysis.
+-   **`SymbolExtractor` / `CallGraph`**: Static analysis for Python/JS.
+-   **`VectorSearchTool` / `BM25SearchTool`**: Semantic & Keyword search.
+-   **`SearchTool` (Ripgrep)**: Regex pattern matching with technical keywords.
 - **Synthesize Answers**: Combines retrieved code snippets, call graphs, and file structure to produce high-fidelity answers.
 
 ### 3. The Search Engine
