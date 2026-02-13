@@ -5,8 +5,6 @@ import shutil
 import json
 from typing import List, Dict
 from dotenv import load_dotenv
-
-# Load environment variables from .env file
 load_dotenv()
 
 from src.tools.search_tool import SearchTool
@@ -153,7 +151,7 @@ def main():
         print("\n[Code-Aware Pipeline]")
 
         # Step 1: Load Project Skeleton
-        print("[Step 1/7] Loading Project Skeleton...")
+        print("[Step 1/8] Loading Project Skeleton...")
         project_structure = ""
         structure_path = os.path.join(search_path, "project_structure.txt")
         if os.path.exists(structure_path):
@@ -163,18 +161,40 @@ def main():
                 print(f"   Loaded file tree ({len(project_structure.splitlines())} entries)")
             except Exception:
                 pass
+            
+        # Step 1b: Load Symbol MiniMap
+        symbol_minimap = {}
+        minimap_path = os.path.join(search_path, "symbol_minimap.json")
+        if os.path.exists(minimap_path):
+            try:
+                with open(minimap_path, "r", encoding="utf-8") as f:
+                    symbol_minimap = json.load(f)
+                print(f"   Loaded Symbol MiniMap for {len(symbol_minimap)} files")
+            except Exception:
+                pass
 
-        # Step 2: Skeleton Analysis — LLM identifies relevant files
-        print("[Step 2/7] Skeleton Analysis (identifying relevant files)...")
+        # Step 2: Query Refinement — Bridge the gap between vague questions and code
+        print("[Step 2/8] Refining Query (Technical Intent)...")
+        refined_data = llm.refine_user_query(args.question, project_context=project_context, file_structure=project_structure)
+        query_to_use = refined_data.get("refined_question", args.question)
+        technical_intent = refined_data.get("intent", "General search")
+        expansion_keywords = refined_data.get("keywords", [])
+        
+        print(f"   Intent: {technical_intent}")
+        if query_to_use != args.question:
+            print(f"   Refined Question: {query_to_use}")
+
+        # Step 3: Skeleton Analysis — LLM identifies relevant files
+        print("[Step 3/8] Skeleton Analysis (identifying relevant files)...")
         targeted_files = []
         skeleton_context = ""
         if project_structure:
-            targeted_files = llm.identify_relevant_files(args.question, project_structure)
+            targeted_files = llm.identify_relevant_files(query_to_use, project_structure, symbol_minimap=symbol_minimap)
             if targeted_files:
                 skeleton_context = "Targeted files:\n" + "\n".join(f"  - {f}" for f in targeted_files)
 
-        # Step 3: Targeted File Retrieval — read full content of identified files
-        print("[Step 3/7] Targeted File Retrieval...")
+        # Step 4: Targeted File Retrieval — read full content of identified files
+        print("[Step 4/8] Targeted File Retrieval...")
         from src.tools.targeted_retriever import TargetedRetriever
         targeted_retriever = TargetedRetriever(cache_path=search_path)
         targeted_chunks = []
@@ -184,8 +204,8 @@ def main():
         else:
             print("   No targeted files identified, relying on search only")
 
-        # Step 4: Symbol Extraction + Call Graph
-        print("[Step 4/7] Code Analysis (Symbols + Call Graph)...")
+        # Step 5: Symbol Extraction + Call Graph
+        print("[Step 5/8] Code Analysis (Symbols + Call Graph)...")
         from src.tools.symbol_extractor import SymbolExtractor
         from src.tools.call_graph import CallGraph
 
@@ -195,8 +215,8 @@ def main():
         call_graph = CallGraph(cache_dir=os.path.join(".cache", "call_graph"))
         call_graph.build_from_symbols(symbol_index, force_rebuild=args.rebuild_index)
 
-        # Step 5: Triple-Hybrid Search (guided by skeleton)
-        print("[Step 5/7] Triple-Hybrid Search (Skeleton-Guided)...")
+        # Step 6: Triple-Hybrid Search (guided by skeleton)
+        print("[Step 6/8] Triple-Hybrid Search (Skeleton-Guided)...")
 
         emb_client = EmbeddingClient()
         vector_tool = VectorSearchTool(
@@ -204,27 +224,31 @@ def main():
             cache_dir=os.path.join(".cache", "vector_index")
         )
         vector_tool.build_index_with_symbols(search_path, symbol_index, force_rebuild=args.rebuild_index)
-        vector_results = vector_tool.search(args.question, top_k=20)
+        vector_results = vector_tool.search(query_to_use, top_k=20)
 
         bm25_tool = BM25SearchTool(cache_dir=os.path.join(".cache", "bm25_index"))
         bm25_tool.build_index(vector_tool.metadata, force_rebuild=args.rebuild_index)
-        bm25_results = bm25_tool.search(args.question, top_k=20)
+        bm25_results = bm25_tool.search(query_to_use, top_k=20)
 
         searcher = SearchTool()
         queries = llm.generate_search_queries(
-            args.question, tool="ripgrep",
+            query_to_use, tool="ripgrep",
             project_context=project_context,
             file_structure=project_structure
         )
+        # Add technical keywords to ripgrep search
+        if expansion_keywords:
+            queries = expansion_keywords[:3] + queries
+            
         keyword_chunks = []
-        for q in queries[:3]:
+        for q in queries[:5]:
             keyword_chunks.extend(searcher.search_and_chunk(q, search_path))
 
         print("   Applying Reciprocal Rank Fusion (RRF)...")
         search_candidates = reciprocal_rank_fusion([vector_results, bm25_results, keyword_chunks])
 
-        # Step 6: Merge Targeted + Search, Deduplicate, Rerank
-        print("[Step 6/7] Merging + Reranking...")
+        # Step 7: Merge Targeted + Search, Deduplicate, Rerank
+        print("[Step 7/8] Merging + Reranking...")
 
         # Targeted chunks - these are GOLD. Keep them all.
         print(f"   [Orchestrator] Keeping {len(targeted_chunks)} targeted chunks.")
@@ -232,10 +256,10 @@ def main():
         # Rerank search candidates only
         reranker = CrossEncoderReranker()
         # Calculate how many search results we can fit
-        slots_remaining = 8 - len(targeted_chunks)
-        if slots_remaining < 3: slots_remaining = 3 # Ensure at least some search results
+        slots_remaining = 10 - len(targeted_chunks)
+        if slots_remaining < 3: slots_remaining = 3 
         
-        reranked_search = reranker.rerank(args.question, search_candidates, top_k=slots_remaining)
+        reranked_search = reranker.rerank(query_to_use, search_candidates, top_k=slots_remaining)
         
         # Combine
         top_chunks = list(targeted_chunks)
@@ -261,8 +285,8 @@ def main():
 
         call_graph_context = "\n\n---\n\n".join(graph_context_parts) if graph_context_parts else ""
 
-        # Step 7: Code-Aware Answer Synthesis
-        print("[Step 7/7] Synthesizing Answer (with skeleton context)...")
+        # Step 8: Code-Aware Answer Synthesis
+        print("[Step 8/8] Synthesizing Answer (with skeleton context)...")
         full_context = "\n\n---\n\n".join([c["content"] for c in top_chunks])
         answer = llm.answer_code_question(
             args.question,

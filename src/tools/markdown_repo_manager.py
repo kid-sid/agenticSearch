@@ -4,6 +4,9 @@ import base64
 from typing import List, Dict
 import concurrent.futures
 import shutil
+import re
+import json
+import ast
 
 class MarkdownRepoManager:
     def __init__(self, token: str, cache_dir: str = ".cache"):
@@ -15,6 +18,7 @@ class MarkdownRepoManager:
         }
         if not os.path.exists(self.cache_dir):
             os.makedirs(self.cache_dir)
+        self.minimap: Dict[str, List[Dict]] = {}
 
     def _generate_tree_structure(self, tree: List[Dict]) -> str:
         """Converts GitHub tree data into an ASCII tree string."""
@@ -113,13 +117,15 @@ class MarkdownRepoManager:
 
             all_content.sort()
             
+            # Save symbol minimap
+            minimap_path = os.path.join(repo_dir, "symbol_minimap.json")
+            with open(minimap_path, "w", encoding='utf-8') as f:
+                json.dump(self.minimap, f, indent=2)
+            print(f"[MD Manager] Saved symbol minimap at: {minimap_path}")
+
             full_md_path = os.path.join(repo_dir, "full_codebase.md")
             with open(full_md_path, "w", encoding='utf-8') as f:
                 f.write(f"# Codebase Dump for {repo_name}\n\n")
-                f.write("## Project Structure\n")
-                f.write("```text\n")
-                f.write(tree_str)
-                f.write("\n```\n\n")
                 f.write("## File Contents\n\n")
                 f.write("\n".join(all_content))
                 
@@ -152,6 +158,97 @@ class MarkdownRepoManager:
             print(f"Error fetching {rel_path}: {e}")
             
         return ""
+
+    def _extract_file_keywords(self, content: str) -> List[str]:
+        """Extracts domain-specific keywords from file content using lightweight heuristics."""
+        # Noise words common in Python that aren't useful for search
+        NOISE = {
+            'self', 'cls', 'return', 'import', 'from', 'def', 'class', 'if', 'else',
+            'elif', 'for', 'while', 'try', 'except', 'with', 'as', 'in', 'not', 'and',
+            'or', 'is', 'none', 'true', 'false', 'pass', 'raise', 'yield', 'lambda',
+            'async', 'await', 'str', 'int', 'float', 'bool', 'list', 'dict', 'set',
+            'tuple', 'type', 'print', 'len', 'range', 'enumerate', 'isinstance',
+            'init', 'name', 'main', 'args', 'kwargs', 'data', 'value', 'key', 'item',
+            'result', 'response', 'request', 'error', 'message', 'info', 'file', 'path',
+            'the', 'this', 'that', 'then', 'than', 'get', 'set', 'add', 'has', 'can',
+        }
+
+        keywords = {}
+
+        # 1. Extract string literals (URLs, model names, config keys)
+        strings = re.findall(r'["\']([a-zA-Z][a-zA-Z0-9_\-/.]{3,60})["\']', content)
+        for s in strings:
+            word = s.lower().strip('/')
+            if word not in NOISE and not word.startswith('__'):
+                keywords[word] = keywords.get(word, 0) + 2  # Extra weight for literals
+
+        # 2. Extract identifiers (snake_case and camelCase split)
+        identifiers = re.findall(r'\b([A-Z][a-zA-Z0-9]{2,}|[a-z][a-z0-9]*(?:_[a-z0-9]+)+)\b', content)
+        for ident in identifiers:
+            # Split camelCase: "AuthService" -> ["auth", "service"]
+            parts = re.findall(r'[A-Z][a-z]+|[a-z]+', ident)
+            for part in parts:
+                word = part.lower()
+                if len(word) > 2 and word not in NOISE:
+                    keywords[word] = keywords.get(word, 0) + 1
+
+        # 3. Sort by frequency, take top 15
+        sorted_kw = sorted(keywords.items(), key=lambda x: -x[1])
+        return [kw for kw, _ in sorted_kw[:15]]
+
+    def _extract_minimap_symbols(self, rel_path: str, content: str):
+        """Extracts a lightweight list of symbols and keywords for the MiniMap (Python only for now)."""
+        ext = os.path.splitext(rel_path)[1].lower()
+        if ext != '.py':
+            return # Minimal support for now, can be expanded to JS/TS later
+            
+        try:
+            tree = ast.parse(content)
+            symbols = []
+            for node in ast.iter_child_nodes(tree):
+                if isinstance(node, ast.ClassDef):
+                    # Class MiniMap
+                    doc = ast.get_docstring(node) or ""
+                    doc_preview = doc.split('\n')[0][:100] if doc else ""
+                    symbols.append({
+                        "name": node.name,
+                        "type": "class",
+                        "doc": doc_preview
+                    })
+                    # Methods
+                    for item in node.body:
+                        if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                            doc = ast.get_docstring(item) or ""
+                            doc_preview = doc.split('\n')[0][:100] if doc else ""
+                            sig = f"({', '.join(arg.arg for arg in item.args.args if arg.arg != 'self')})"
+                            symbols.append({
+                                "name": f"{node.name}.{item.name}",
+                                "type": "method",
+                                "signature": sig,
+                                "doc": doc_preview
+                            })
+                elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    # Function MiniMap
+                    doc = ast.get_docstring(node) or ""
+                    doc_preview = doc.split('\n')[0][:100] if doc else ""
+                    sig = f"({', '.join(arg.arg for arg in node.args.args)})"
+                    symbols.append({
+                        "name": node.name,
+                        "type": "function",
+                        "signature": sig,
+                        "doc": doc_preview
+                    })
+            
+            # Extract domain-specific keywords
+            file_keywords = self._extract_file_keywords(content)
+
+            if symbols or file_keywords:
+                self.minimap[rel_path] = {
+                    "symbols": symbols,
+                    "keywords": file_keywords
+                }
+        except Exception:
+            pass # Skip malformed files
 
     def _fetch_batch_graphql(self, repo_name: str, blobs: List[Dict]) -> List[str]:
         """
@@ -213,6 +310,9 @@ class MarkdownRepoManager:
                 
                 # Check for empty content
                 if not text.strip(): continue
+
+                # Extract symbols for MiniMap as we go
+                self._extract_minimap_symbols(path, text)
 
                 md_block = f"# File: {path}\n\n```{ext}\n{text}\n```\n\n"
                 results.append(md_block)

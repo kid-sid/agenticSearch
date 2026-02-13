@@ -214,6 +214,10 @@ class VectorSearchTool:
                 if ext not in INDEXABLE_EXTENSIONS and not is_known_file:
                     continue
 
+                # Skip system-generated metadata files in cache
+                if filename in {"full_codebase.md", "project_structure.txt", "index.faiss", "metadata.json"}:
+                    continue
+
                 filepath = os.path.join(dirpath, filename)
                 rel_path = os.path.relpath(filepath, root_path)
 
@@ -295,6 +299,10 @@ class VectorSearchTool:
                     'contributing', 'authors', '.gitignore', '.dockerignore',
                 }
                 if ext not in INDEXABLE_EXTENSIONS and not is_known_file:
+                    continue
+
+                # Skip system-generated metadata files in cache
+                if filename in {"full_codebase.md", "project_structure.txt", "index.faiss", "metadata.json"}:
                     continue
 
                 filepath = os.path.join(dirpath, filename)

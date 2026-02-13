@@ -52,6 +52,10 @@ class SymbolExtractor:
                 rel_path = os.path.relpath(filepath, root_path)
                 ext = os.path.splitext(filename)[1].lower()
 
+                # Skip system-generated metadata files
+                if filename in {"full_codebase.md", "project_structure.txt", "index.faiss", "metadata.json", "symbol_index.json"}:
+                    continue
+
                 symbols = []
                 if ext in self.PYTHON_EXTENSIONS:
                     symbols = self._extract_python(filepath)

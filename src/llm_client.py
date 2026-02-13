@@ -4,9 +4,19 @@ import os
 import sys
 import json
 from openai import OpenAI
+from src.prompts import (
+    refine_query_prompt,
+    identify_relevant_files_prompt,
+    generate_search_queries_prompt,
+    answer_question_prompt,
+    answer_code_question_prompt,
+    analyze_project_context_prompt,
+    generate_questions_prompt,
+    github_search_query_prompt
+)
 
 class LLMClient:
-    def __init__(self, provider: str = "mock"):
+    def __init__(self, provider: str = "openai"):
         self.provider = provider
         self.api_key = None
         self.client = None
@@ -17,36 +27,74 @@ class LLMClient:
             else:
                 print("Warning: OPENAI_API_KEY not set. LLM calls will fail.")
         
-    def identify_relevant_files(self, user_question: str, file_structure: str) -> List[str]:
+    def refine_user_query(self, user_question: str, project_context: str = "", file_structure: str = "") -> Dict:
         """
-        Skeleton-first analysis: Given a project file tree, identify the files
-        most likely to contain the answer to the user's question.
-        Returns a list of 3-8 file paths.
+        Refines a vague user query into a technical information need.
+        Returns a dict with 'intent', 'refined_question', and 'keywords'.
+        """
+        if self.provider == "mock":
+            return {
+                "intent": "Search for code related to the question.",
+                "refined_question": user_question,
+                "keywords": user_question.split()
+            }
+
+        prompt = refine_query_prompt(user_question, project_context, file_structure)
+
+        if self.provider == "openai" and self.client:
+            try:
+                response = self.client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[{"role": "system", "content": "You are a helpful assistant. Return ONLY valid JSON."},
+                              {"role": "user", "content": prompt}],
+                    temperature=0.1
+                )
+                content = response.choices[0].message.content.strip()
+                match = re.search(r'\{.*\}', content, re.DOTALL)
+                if match:
+                    return json.loads(match.group(0))
+            except Exception as e:
+                print(f"[Query Expansion] Warning: Failed to refine query: {e}")
+        
+        return {
+            "intent": "General code search",
+            "refined_question": user_question,
+            "keywords": []
+        }
+
+    def identify_relevant_files(self, user_question: str, file_structure: str, symbol_minimap: Dict = None) -> List[str]:
+        """
+        Skeleton-first analysis: Given a project file tree and an optional symbol minimap,
+        identify the files most likely to contain the answer.
         """
         if self.provider == "mock":
             return []
 
-        prompt = f"""You are an expert developer. Given this project file structure, identify which files are MOST LIKELY to contain the answer to the user's question.
+        minimap_hint = ""
+        if symbol_minimap:
+            # Create a condensed version of the minimap for the prompt
+            parts = []
+            for path, entry in list(symbol_minimap.items())[:50]: # Cap to 50 files for prompt space
+                # Handle both old format (list) and new format (dict with symbols/keywords)
+                if isinstance(entry, list):
+                    symbols = entry
+                    file_keywords = []
+                else:
+                    symbols = entry.get("symbols", [])
+                    file_keywords = entry.get("keywords", [])
+                
+                sym_strs = []
+                for s in symbols[:10]: # Cap symbols per file
+                    sig = s.get("signature", "")
+                    doc = f" - {s['doc']}" if s.get("doc") else ""
+                    sym_strs.append(f"{s['name']}{sig}{doc}")
+                
+                kw_str = f"  Keywords: {', '.join(file_keywords)}" if file_keywords else ""
+                parts.append(f"### {path}\n" + "\n".join(f"  * {ss}" for ss in sym_strs) + (f"\n{kw_str}" if kw_str else ""))
+            
+            minimap_hint = f"\nSymbol MiniMap (Classes, Functions, Signatures, Keywords):\n" + "\n".join(parts) + "\n"
 
-Project Structure:
-```
-{file_structure}
-```
-
-Question: {user_question}
-
-RULES:
-- Return 3-8 file paths that are most relevant
-- Prioritize source code files (.py, .js, .ts) over docs/tests
-- For questions about configuration, constants, or specific model names/ports, ALWAYS include 'config.py' or equivalent config files.
-- For questions about data storage, caching, or history, ALWAYS include relevant service files (e.g., 'services/redis.py', 'services/database.py') even if the feature sounds missing.
-- For questions about security/auth, include auth-related files  
-- For questions about features, include the main app file AND relevant service files
-- For questions about CORS, middleware, or server config, ALWAYS include main.py
-- Think about which files a developer would open to answer this question
-
-Return ONLY JSON array of file paths, no explanation. Example:
-["services/auth_service.py", "routes/auth_router.py", "config.py"]"""
+        prompt = identify_relevant_files_prompt(user_question, file_structure, minimap_hint)
 
         if self.provider == "openai" and self.client:
             try:
@@ -100,28 +148,9 @@ Return ONLY JSON array of file paths, no explanation. Example:
 Use this structure to generate targeted queries. For example, if you see 'services/auth_service.py', search for function names or patterns likely in that file.\n"""
             
         if tool == "github":
-             prompt = f"Search query for {user_question}"
+             prompt = github_search_query_prompt(user_question)
         else:
-             prompt = f"""
-You are an expert developer assistant. Your task is to generate 5-10 search queries to find code relevant to the user's question.
-Target tool: ripgrep (regex supported).
-
-Project Context (Summary):
-{project_context}
-{structure_hint}
-Strategies:
-1.  **Simple Keywords**: Start with broad, single-word terms (e.g., 'platform', 'linux', 'windows', 'support').
-2.  **Code Patterns**: Search for class names, function definitions, variable assignments related to the question.
-3.  **Exact Matches**: Look for exact string literals if the user asks for a specific message or error.
-4.  **Synonyms**: Include synonyms and related terms (e.g., for 'brute force' also search 'login_attempt', 'lockout', 'blocked').
-5.  **Configuration Patterns**: For config questions, search for middleware, env vars, constants (e.g., 'CORSMiddleware', 'allow_origins').
-6.  **Avoid Complex Regex**: Do NOT use complex regex (like `.*`) unless searching for a strict code pattern. Prefer simple substrings.
-
-Format: Return ONLY the search queries, one per line. No bullets, no numbering.
-
-{history_str}
-Question: {user_question}
-        """
+             prompt = generate_search_queries_prompt(user_question, project_context, structure_hint, history_str)
 
         if self.provider == "openai" and self.client:
             response = self.client.chat.completions.create(
@@ -146,16 +175,7 @@ Question: {user_question}
                 history_str += f"{msg['role'].capitalize()}: {msg['content']}\n"
             history_str += "\n"
 
-        prompt = f"""
-You are an expert developer assistant. Answer the user's question based strictly on the provided codebase context and the conversation history.
-If the answer is not in the context, say so. Do not hallucinate.
-
-{history_str}
-Question: {user_question}
-
-Context:
-{context}
-        """
+        prompt = answer_question_prompt(user_question, context, history_str)
 
         if self.provider == "openai" and self.client:
             response = self.client.chat.completions.create(
@@ -211,35 +231,10 @@ The following files were identified as most relevant to this question. Pay speci
 {skeleton_context}
 """
 
-        prompt = f"""You are an expert code analyst. Answer the user's question using the provided code context, call graph, and project structure.
-
-ANALYSIS STRATEGY:
-1. **Targeted Files First**: Start by analyzing the code from the specifically targeted files — these were identified as most relevant.
-2. **Context Awareness**: Understand where each code snippet fits in the project architecture.
-3. **Function Relationships**: Use the call graph to trace which functions interact with each other.
-4. **Call Chain Tracing**: When a function is relevant, identify what it calls (downstream) and what calls it (upstream).
-5. **Root Cause Identification**: If the question is about a bug or issue, trace the dependency chain to find the actual source — not just the symptom.
-6. **Look for Stubs/Mocks/TODOs/Dead Code**: 
-   - Carefully check for stub implementations, TODO comments, hardcoded test values, or mock returns.
-   - Even if a feature is marked as 'missing' in a README, check if service methods exist but are not 'wired up' (called) in the routes.
-7. **Find Hardcoded Constants**: For questions about specific values (model names, ports, expirations), look for the actual string or integer definitions in config files, not just the setting variable name.
-
-RULES:
-- Always cite the file path and line numbers for your answer.
-- If you find a function is causing an issue, trace its callers and callees to explain the full impact.
-- If the answer is not in the context, say so clearly.
-- Do NOT hallucinate code that doesn't exist in the context.
-- When analyzing security or configuration, examine the ACTUAL values in code (not docs or comments about what they should be).
-
-{history_str}
-{structure_section}
-{skeleton_section}
-{graph_section}
-
-Code Context:
-{context}
-
-Question: {user_question}"""
+        prompt = answer_code_question_prompt(
+            user_question, context, history_str,
+            structure_section, skeleton_section, graph_section
+        )
 
         if self.provider == "openai" and self.client:
             response = self.client.chat.completions.create(
@@ -262,19 +257,7 @@ Question: {user_question}"""
         if self.provider == "mock":
             return "Mock Project Context"
 
-        prompt = f"""
-You are an expert developer assistant. Analyze the following README content and provide a concise summary to help with code search.
-Focus on:
-1. Core Functionality & Purpose
-2. Key Architectural Components (if mentioned)
-3. Important Terminology or Jargon
-4. Folder Structure hints (if mentioned)
-
-Keep it under 200 words.
-
-README Content:
-{readme_content[:1000]} 
-        """
+        prompt = analyze_project_context_prompt(readme_content)
 
         if self.provider == "openai" and self.client:
             response = self.client.chat.completions.create(
@@ -297,18 +280,7 @@ README Content:
         # GPT-4o has 128k context, but we want to be cost-effective and safe.
         safe_context = context[:50000] 
 
-        prompt = f"""
-You are an expert developer assistant. 
-Based on the following project codebase dump, generate {num} insightful technical questions that a new developer might ask to understand the architecture, key features, or usage of this system.
-For each question, provide a brief, accurate answer derived ONLY from the provided context.
-
-Format:
-1. **Question**: [Question text]
-   - **Answer**: [Brief answer]
-
-Context (Truncated):
-{safe_context}
-        """
+        prompt = generate_questions_prompt(safe_context, num)
 
         if self.provider == "openai" and self.client:
             try:
