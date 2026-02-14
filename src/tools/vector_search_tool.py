@@ -153,8 +153,7 @@ class VectorSearchTool:
 
         return results
 
-    # ── File Chunking ────────────────────────────────────────────────
-
+    # File Chunking
     def _load_gitignore_patterns(self, root_path: str) -> List[str]:
         """Load .gitignore patterns from the root path."""
         gitignore_path = os.path.join(root_path, ".gitignore")
@@ -347,7 +346,7 @@ class VectorSearchTool:
                         if not calls and sym.get("methods"):
                             # For classes, list method names
                             calls = [m.get("name", "") for m in sym.get("methods", [])]
-
+                            
                         call_info = ""
                         if calls:
                             call_info = f"\nCalls: {', '.join(calls[:15])}"
@@ -399,8 +398,7 @@ class VectorSearchTool:
         print(f"[VectorSearch] Symbol-aware index built: {self.index.ntotal} vectors")
         return self.index.ntotal
 
-    # ── Cache Persistence ────────────────────────────────────────────
-
+    #Cache Persistence
     def _save_cache(self):
         """Save FAISS index and metadata to disk."""
         os.makedirs(self.cache_dir, exist_ok=True)

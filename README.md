@@ -1,4 +1,4 @@
-# Agentic Search Tool
+# gitSurf
 
 An AI-powered CLI tool that performs context-aware, semantic code search over any GitHub repository. It treats code search as a reasoning problem, not just a keyword matching problem.
 
@@ -21,8 +21,8 @@ Standard RAG (Retrieval Augmented Generation) often fails on code because it mis
 
 1.  **Clone the repository**:
     ```bash
-    git clone <your-repo-url>
-    cd agenticSearch
+    git clone https://github.com/your-username/gitSurf.git
+    cd gitSurf
     ```
 
 2.  **Install Dependencies**:
@@ -38,8 +38,9 @@ Standard RAG (Retrieval Augmented Generation) often fails on code because it mis
 4.  **Configure Environment**:
     Create a `.env` file in the root directory:
     ```env
-    OPENAI_API_KEY=sk-...
-    GITHUB_TOKEN=ghp_... (Required for GitHub Search)
+    OPENAI_API_KEY=your-openai-api-key
+    GITHUB_TOKEN=your-github-token (Required for GitHub Search)
+    Check example.env for more details.
     ```
 
 ## Usage
@@ -67,11 +68,17 @@ python main.py --github-repo owner/repo --suggest
 # Force rebuild of vector index
 python main.py "query" --github-repo owner/repo --rebuild-index
 
-# Skip verification step (faster)
+# Skip the verification step where the AI critiques its own answer (faster)
 python main.py "query" --github-repo owner/repo --skip-verify
 
 # Clear all cache
 python main.py --clear-cache
+
+# Reset conversation history
+python main.py --reset
+
+# Use legacy git clone (instead of markdown cache)
+python main.py "query" --github-repo owner/repo --clone
 ```
 
 ## Architecture

@@ -50,9 +50,18 @@ class LLMClient:
                     temperature=0.1
                 )
                 content = response.choices[0].message.content.strip()
-                match = re.search(r'\{.*\}', content, re.DOTALL)
-                if match:
-                    return json.loads(match.group(0))
+                
+                # Robust JSON extraction
+                start_idx = content.find('{')
+                end_idx = content.rfind('}')
+                
+                if start_idx != -1 and end_idx != -1:
+                    json_str = content[start_idx:end_idx+1]
+                    try:
+                        return json.loads(json_str)
+                    except json.JSONDecodeError:
+                        pass # Fall through to default
+                        
             except Exception as e:
                 print(f"[Query Expansion] Warning: Failed to refine query: {e}")
         

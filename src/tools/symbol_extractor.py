@@ -76,10 +76,7 @@ class SymbolExtractor:
 
         return self.symbols
 
-    # ------------------------------------------------------------------ #
     #  Python AST Extraction (High Accuracy)
-    # ------------------------------------------------------------------ #
-
     def _extract_python(self, filepath: str) -> List[Dict]:
         """Extract symbols from a Python file using the ast module."""
         try:
@@ -193,10 +190,7 @@ class SymbolExtractor:
             return str(node.value)
         return ""
 
-    # ------------------------------------------------------------------ #
     #  JavaScript/TypeScript Regex Extraction (Best-Effort)
-    # ------------------------------------------------------------------ #
-
     def _extract_js(self, filepath: str) -> List[Dict]:
         """Extract symbols from JS/TS files using regex."""
         try:
@@ -245,16 +239,14 @@ class SymbolExtractor:
         keywords = {'if', 'for', 'while', 'switch', 'catch', 'return', 'new', 'typeof', 'instanceof'}
         return list(set(c for c in calls if c not in keywords))
 
-    # ------------------------------------------------------------------ #
     #  C-Family Regex Extraction (Best-Effort)
-    # ------------------------------------------------------------------ #
-
     def _extract_c_family(self, filepath: str) -> List[Dict]:
         """Extract symbols from C/C++/Java/Go/Rust files using regex."""
         try:
             with open(filepath, "r", encoding="utf-8", errors="replace") as f:
                 source = f.read()
-        except Exception:
+        except Exception as e:
+            print(f"[SymbolExtractor] Error reading {filepath}: {e}")
             return []
 
         symbols = []
@@ -292,10 +284,7 @@ class SymbolExtractor:
 
         return symbols
 
-    # ------------------------------------------------------------------ #
     #  Shared Helpers
-    # ------------------------------------------------------------------ #
-
     def _find_block_end(self, lines: List[str], start_idx: int) -> int:
         """Find the end of a brace-delimited block starting near start_idx."""
         depth = 0
