@@ -1,13 +1,21 @@
 # Agentic Search Tool
 
-An AI-powered CLI tool that performs semantic search over your codebase using `ripgrep` and answers questions using an LLM (OpenAI).
+An AI-powered CLI tool that performs context-aware, semantic code search over any GitHub repository. It treats code search as a reasoning problem, not just a keyword matching problem.
 
-## Features
-- **Context-Aware Search**: Automatically fetches `README.md` first to understand the project architecture before searching.
-- **Vector Search (FAISS)**: Semantic code search using OpenAI embeddings and FAISS HNSW index. Finds conceptually similar code, not just keyword matches.
-- **Smart Caching**: checks for existing local caches to skip API calls, enabling instant subsequent searches on the same repo.
-- **Deep Context**: Retrieves file content and synthesizes answers based on actual code.
-- **Cross-Platform**: Works on Windows, macOS, and Linux.
+## Why This Exists?
+Standard RAG (Retrieval Augmented Generation) often fails on code because it misses abstract relationships and specific variable names. This tool uses a **Triple-Hybrid Search** (Semantic + Keyword + Regex) combined with an **8-Step Reasoning Pipeline** to find the exact lines of code you need, even in massive or unfamiliar codebases.
+
+## Features (v1.1)
+
+-   **8-Step Reasoning Pipeline**: From Skeleton Analysis to MiniMap-guided retrieval to final answer synthesis.
+-   **Symbol MiniMap**: Automatically extracts and tracks function signatures, classes, and exported symbols to catch abstract names.
+-   **Triple-Hybrid Search**: Runs 3 search engines in parallel:
+    -   **Vector (FAISS)**: For conceptual understanding ("auth logic").
+    -   **BM25 (Statistical)**: For keyword relevance.
+    -   **Ripgrep (Regex)**: For exact string/pattern matching.
+-   **Query Expansion**: Translates vague questions ("how is data saved?") into technical intent ("persistence layer implementation").
+-   **Smart Reranking**: content-aware cross-encoder validates every chunk before the LLM sees it.
+-   **Markdown Caching**: Flattens repo structure into optimized Markdown for fast, token-efficient analysis.
 
 ## Setup
 
@@ -22,10 +30,10 @@ An AI-powered CLI tool that performs semantic search over your codebase using `r
     pip install -r requirements.txt
     ```
 
-3.  **Install Ripgrep**:
-    - **Windows**: `winget install BurntSushi.ripgrep.MSVC`
-    - **macOS**: `brew install ripgrep`
-    - **Linux**: `apt-get install ripgrep`
+3.  **Install Ripgrep** (Required for Regex Search):
+    -   **Windows**: `winget install BurntSushi.ripgrep.MSVC`
+    -   **macOS**: `brew install ripgrep`
+    -   **Linux**: `apt-get install ripgrep`
 
 4.  **Configure Environment**:
     Create a `.env` file in the root directory:
@@ -36,59 +44,73 @@ An AI-powered CLI tool that performs semantic search over your codebase using `r
 
 ## Usage
 
-### 1. GitHub Context-Aware Search (Recommended)
-This mode fetches the README, analyzes project context, caches the repo structure (as Markdown), and then performs a smart search.
+### 1. GitHub Context-Aware Search (Primary Mode)
+Analyzes a remote GitHub repo without cloning the full history.
 ```bash
-python main.py "How does the search logic work?" --github-repo owner/repo --provider openai
+python main.py "How is the JWT validation implemented?" --github-repo owner/repo
 ```
 
-### 2. Local Search with Context
-Run the tool against your local files. It will try to read a local `README.md` for context.
+### 2. Local Search
+Run against a local directory.
 ```bash
-python main.py "Where is the main entry point?" --path . --provider openai
+python main.py "Where is the main entry point?" --path .
 ```
 
-### 3. Smart Suggestions
-Generate relevant technical questions from the codebase.
+### 3. Generate Questions
+Auto-generate technical questions to help you explore a new codebase.
 ```bash
 python main.py --github-repo owner/repo --suggest
 ```
 
-### 4. Hybrid Search (Semantic + Keyword)
-The tool now automatically combines FAISS vector search and RipGrep keyword search, followed by cross-encoder reranking and verification for maximum accuracy.
-
+### 4. Advanced Options
 ```bash
-# Local search (Hybrid mode is now default)
-python main.py "How does authentication work?" --path .
+# Force rebuild of vector index
+python main.py "query" --github-repo owner/repo --rebuild-index
 
-# With GitHub repo
-python main.py "error handling patterns" --github-repo owner/repo
+# Skip verification step (faster)
+python main.py "query" --github-repo owner/repo --skip-verify
 
-# Force re-index or skip verification
-python main.py "database queries" --path . --rebuild-index --skip-verify
+# Clear all cache
+python main.py --clear-cache
 ```
-
-### 5. Legacy Full Clone
-If you need the actual raw code files (e.g. for execution), use `--clone`.
-```bash
-python main.py "query" --github-repo owner/large-repo --clone
-```
-
-## GraphQL Optimization
-The tool now uses GitHub's GraphQL API to fetch file contents in batches (50 files/request). This significantly reduces HTTP overhead and rate limit usage compared to standard REST API calls.
 
 ## Architecture
 
-For a detailed deep-dive into the 7-step pipeline, hybrid search logic, and core components, see the [**ARCHITECTURE.md**](ARCHITECTURE.md) file.
+The system follows an **8-Step Pipeline**:
+1.  **Load Skeleton & MiniMap**: Context loading.
+2.  **Query Expansion**: Intent classification.
+3.  **Skeleton Analysis**: Identifying key files.
+4.  **Targeted Retrieval**: Fetching full file content.
+5.  **Symbol Extraction**: Building call graphs.
+6.  **Hybrid Search**: FAISS + BM25 + Ripgrep.
+7.  **Merge & Rerank**: Cross-Encoder validation.
+8.  **Synthesis**: Final answer generation.
 
-## Structure
-- `main.py`: CLI entry point. Orchestrates the flow: **Context -> Cache -> Search -> Answer**.
-- `src/`:
-    - `llm_client.py`: LLM integration (OpenAI). Handles context analysis and query generation.
-    - `embeddings.py`: Embedding client for OpenAI `text-embedding-3-small`.
-    - `reranker.py`: Cross-encoder reranking using `gpt-4o-mini`.
-    - `verifier.py`: LLM-based answer verification.
-    - `tools/`:
-        - `markdown_repo_manager.py`: Handles fetching repo content via API and caching as Markdown.
-        - `search_tool.py`: Wrapper for local `ripgrep` with context-aware chunking.
-        - `vector_search_tool.py`: FAISS HNSW vector search with file chunking and index caching.
+See [**ARCHITECTURE.md**](ARCHITECTURE.md) for a deep dive.
+
+## Project Structure
+-   `main.py`: CLI Orchestrator.
+-   `src/llm_client.py`: Intelligence layer (uses `src/prompts.py`).
+-   `src/tools/`:
+    -   `markdown_repo_manager.py`: GitHub sync & MiniMap builder.
+    -   `vector_search_tool.py`: FAISS implementation.
+    -   `symbol_extractor.py`: Static analysis.
+
+## Contributing
+
+We welcome contributions! Please follow this workflow:
+
+1.  **Create a new branch** from `dev`:
+    ```bash
+    git checkout dev
+    git checkout -b feature/your-feature-name
+    ```
+2.  **Make your changes** and commit them.
+
+3.  **Commit Messages**: Please follow this format:
+    -   `feat: Implemented new feature...`
+    -   `bugfix: Fixed specific bug...`
+    -   `docs: Updated documentation...`
+    -   `refactor: Code cleanup or restructuring...`
+
+4.  **Open a Pull Request** targeting the `dev` branch.
