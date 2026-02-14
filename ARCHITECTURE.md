@@ -1,4 +1,4 @@
-# Architecture: Agentic Search Tool
+# Architecture: gitSurf (Agentic Search Tool)
 
 This document outlines the high-level architecture and processing pipeline of the Agentic Search Tool. The system is designed to perform context-aware, semantic code searches across large repositories by combining statistical models with LLM intelligence.
 
